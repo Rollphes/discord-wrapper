@@ -1,0 +1,125 @@
+{
+  "name": "discord-universal-sdk",
+  "version": "0.1.0",
+  "description": "Next-generation Discord library with multi-runtime support",
+  "keywords": [
+    "discord",
+    "bot",
+    "api",
+    "cloudflare",
+    "workers",
+    "deno",
+    "bun",
+    "typescript",
+    "multi-runtime"
+  ],
+  "author": "Rollphes",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rollphes/discord-wrapper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Rollphes/discord-wrapper/issues"
+  },
+  "homepage": "https://github.com/Rollphes/discord-wrapper#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./adapters/hono": {
+      "import": "./dist/adapters/hono.js",
+      "types": "./dist/adapters/hono.d.ts"
+    },
+    "./adapters/nextjs": {
+      "import": "./dist/adapters/nextjs.js",
+      "types": "./dist/adapters/nextjs.d.ts"
+    },
+    "./adapters/express": {
+      "import": "./dist/adapters/express.js",
+      "types": "./dist/adapters/express.d.ts"
+    },
+    "./adapters/fastify": {
+      "import": "./dist/adapters/fastify.js",
+      "types": "./dist/adapters/fastify.d.ts"
+    },
+    "./adapters/nuxtjs": {
+      "import": "./dist/adapters/nuxtjs.js",
+      "types": "./dist/adapters/nuxtjs.d.ts"
+    },
+    "./adapters/itty-router": {
+      "import": "./dist/adapters/itty-router.js",
+      "types": "./dist/adapters/itty-router.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "type-check": "tsc --noEmit",
+    "docs": "typedoc",
+    "prepublishOnly": "npm run build && npm run test && npm run lint"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "tsup": "^8.0.0",
+    "typedoc": "^0.25.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "peerDependencies": {
+    "hono": "^4.0.0",
+    "next": "^14.0.0",
+    "express": "^4.0.0",
+    "fastify": "^4.0.0",
+    "nuxt": "^3.0.0",
+    "itty-router": "^4.0.0",
+    "prisma": "^5.0.0",
+    "kysely": "^0.27.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "fastify": {
+      "optional": true
+    },
+    "nuxt": {
+      "optional": true
+    },
+    "itty-router": {
+      "optional": true
+    },
+    "prisma": {
+      "optional": true
+    },
+    "kysely": {
+      "optional": true
+    }
+  }
+}
