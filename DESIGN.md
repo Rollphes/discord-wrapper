@@ -27,7 +27,60 @@ const cfClient = new CloudflareDiscordClient(config)
 
 ## 1. 基本設計コンセプト
 
-### 1.1 自動intents推定
+### 1.1 ランタイム制約管理とエラーハンドリング
+
+```typescript
+// 統一されたランタイム制約管理
+export interface RuntimeConstraints {
+  maxExecutionTime: number
+  supportsLongRunning: boolean
+  supportsFileSystem: boolean
+  supportsWebSocket: boolean
+}
+
+export class ConstraintManager {
+  static getConstraints(runtime: RuntimeType): RuntimeConstraints {
+    switch (runtime) {
+      case 'cloudflare-workers':
+        return {
+          maxExecutionTime: 10000, // 10ms
+          supportsLongRunning: true, // waitUntil経由
+          supportsFileSystem: false,
+          supportsWebSocket: false
+        }
+      case 'nodejs':
+        return {
+          maxExecutionTime: Infinity,
+          supportsLongRunning: true,
+          supportsFileSystem: true,
+          supportsWebSocket: true
+        }
+    }
+  }
+}
+
+// 統一されたエラー分類
+export enum ErrorSource {
+  DISCORD_API = 'discord_api',
+  LIBRARY_INTERNAL = 'library_internal',
+  USER_INPUT = 'user_input',
+  RUNTIME_CONSTRAINT = 'runtime_constraint'
+}
+
+export class DiscordUniversalError extends Error {
+  constructor(
+    public readonly source: ErrorSource,
+    public readonly code: string,
+    message: string,
+    public readonly details?: Record<string, unknown>
+  ) {
+    super(message)
+    this.name = 'DiscordUniversalError'
+  }
+}
+```
+
+### 1.2 自動intents推定
 
 使用するAPIに基づいてintentsを自動推定：
 
@@ -39,6 +92,9 @@ const client = new NodeDiscordClient({
 })
 ```
 
+### 1.3 REST APIクライアント
+
+```typescript
 // core/rest/client.ts - REST APIクライアント
 export class RestClient {
   private rateLimiter: RateLimiter
@@ -55,7 +111,7 @@ export class RestClient {
 }
 ```
 
-### 1.2 Strategy Pattern実装
+### 1.4 Strategy Pattern実装
 
 ```typescript
 // interaction/strategies/base.ts
@@ -108,7 +164,109 @@ export class WebhookInteractionStrategy implements InteractionStrategy {
 }
 ```
 
-### 1.3 ランタイム固有クライアント実装
+### 1.5 型安全なコンポーネント登録システム
+
+```typescript
+// 改善された型安全なコンポーネント登録
+class InteractionManager {
+  // 型安全なコンポーネント登録
+  register<T extends IInteractionHandler>(
+    HandlerClass: new () => T
+  ): T extends ISlashCommand
+    ? SlashCommandRegistration<T>
+    : T extends IButtonComponent
+    ? ButtonComponentRegistration<T>
+    : ComponentRegistration<T>
+
+  // CustomId衝突検出機能
+  private validateCustomId(customId: string, component: IComponent): void {
+    if (this.components.has(customId)) {
+      const existing = this.components.get(customId)
+      throw new DiscordUniversalError(
+        ErrorSource.USER_INPUT,
+        'CUSTOMID_COLLISION',
+        `CustomId "${customId}" is already registered`,
+        {
+          newComponent: component.constructor.name,
+          existingComponent: existing?.constructor.name,
+          customId
+        }
+      )
+    }
+  }
+}
+```
+
+### 1.6 コンポーネントライフサイクル管理
+
+```typescript
+// メモリリーク防止のためのライフサイクル管理
+export class ComponentLifecycleManager {
+  private static instances = new WeakMap<object, ComponentInstance>()
+
+  static track<T extends IComponent>(component: T): T {
+    const instance = new ComponentInstance(component)
+    this.instances.set(component, instance)
+    return component
+  }
+
+  static cleanup(component: IComponent): void {
+    const instance = this.instances.get(component)
+    instance?.dispose()
+    this.instances.delete(component)
+  }
+}
+
+class ComponentInstance {
+  private readonly timeoutHandles = new Set<NodeJS.Timeout>()
+  private readonly eventListeners = new Map<string, Function[]>()
+
+  constructor(private component: IComponent) {}
+
+  dispose(): void {
+    // タイムアウトの清理
+    this.timeoutHandles.forEach(handle => clearTimeout(handle))
+    this.timeoutHandles.clear()
+
+    // イベントリスナーの清理
+    this.eventListeners.forEach((listeners, event) => {
+      listeners.forEach(listener => {
+        // イベント削除処理
+      })
+    })
+    this.eventListeners.clear()
+  }
+}
+```
+
+### 1.7 ランタイム抽象化レイヤー
+
+```typescript
+// マルチランタイム統一インターフェース
+export interface RuntimeAbstraction {
+  fetch: FetchFunction
+  setTimeout: SetTimeoutFunction
+  crypto: CryptoFunction
+  storage?: StorageFunction
+  constraints: RuntimeConstraints
+}
+
+export class RuntimeDetector {
+  static detect(): RuntimeAbstraction {
+    // 実行環境の自動検出と統一インターフェース提供
+    if (typeof Deno !== 'undefined') {
+      return new DenoRuntimeAbstraction()
+    } else if (typeof process !== 'undefined' && process.versions?.node) {
+      return new NodeRuntimeAbstraction()
+    } else if (typeof navigator !== 'undefined' && navigator.userAgent?.includes('Cloudflare')) {
+      return new CloudflareRuntimeAbstraction()
+    }
+    throw new Error('Unsupported runtime environment')
+  }
+}
+```
+
+### 1.8 ランタイム固有クライアント実装
 
 ```typescript
 // adapters/node/client.ts
@@ -135,7 +293,7 @@ export class CloudflareDiscordClient extends BaseClient {
 }
 ```
 
-### 1.4 Adapter Pattern実装
+### 1.9 Adapter Pattern実装
 
 ```typescript
 // adapters/framework/base.ts
@@ -976,9 +1134,18 @@ export class ErrorHandler {
 3. **新コンポーネント追加**: システム全体図とコンポーネント図を更新
 4. **API変更**: 使用例コードとREADME.md を同期更新
 
-関連ドキュメント：
+## 関連ドキュメント
+
 - [要件定義書](./REQUIREMENTS.md) - プロジェクトの要件と制約
 - [システム設計図](./ARCHITECTURE.md) - Mermaidによる視覚的アーキテクチャ
+
+## 設計の重要な変更点
+
+1. **エラーハンドリングの統一**: ErrorSourceによる分類と詳細なエラー情報
+2. **Runtime制約の明示**: 各ランタイムの制約を統一的に管理
+3. **型安全性の最適化**: Template Literal Typesの必要最小限使用
+4. **コンポーネントライフサイクル**: メモリリーク防止とCustomId衝突検出
+5. **データ永続化戦略**: ランタイム別の最適な永続化方法
 6. **再利用性**: JSONベースのコンポーネント設計で再利用性を最大化
 
 これらの設計により、Discord.jsの課題を解決し、モダンな開発環境に適応したライブラリを構築できます。

@@ -15,6 +15,8 @@ graph TB
             CLIENT[DiscordClient]
             REST[RestClient]
             GATEWAY[GatewayClient]
+            ERROR[ErrorHandler]
+            CONSTRAINT[ConstraintManager]
         end
 
         subgraph "Interaction Layer"
@@ -22,6 +24,7 @@ graph TB
             STRATEGY[InteractionStrategy]
             GSTRAT[GatewayStrategy]
             WSTRAT[WebhookStrategy]
+            LIFECYCLE[ComponentLifecycle]
         end
 
         subgraph "Component Layer"
@@ -29,6 +32,7 @@ graph TB
             ICOMP[IComponent]
             BUTTON[ButtonComponent]
             MODAL[ModalComponent]
+            VALIDATION[CustomIdValidator]
         end
 
         subgraph "Adapter Layer"
@@ -36,10 +40,12 @@ graph TB
             HONO[HonoAdapter]
             NEXTJS[NextJSAdapter]
             EXPRESS[ExpressAdapter]
+            PERSIST[PersistenceAdapter]
         end
 
         subgraph "Runtime Layer"
             RUNTIME[RuntimeDetector]
+            ABSTRACTION[RuntimeAbstraction]
             NODE[NodeRuntime]
             DENO[DenoRuntime]
             CF[CloudflareRuntime]
@@ -48,6 +54,8 @@ graph TB
 
     subgraph "External Services"
         DISCORD[Discord API]
+        DB[(Database/KV)]
+        CACHE[(Cache Store)]
         WEBHOOK[Webhook Endpoint]
     end
 
@@ -55,16 +63,19 @@ graph TB
     APP --> COMP
     APP --> CMD
 
-    CLIENT --> FACTORY
-    FACTORY --> REST
-    FACTORY --> GATEWAY
+    CLIENT --> REST
+    CLIENT --> GATEWAY
+    CLIENT --> ERROR
+    CLIENT --> CONSTRAINT
 
     CLIENT --> MANAGER
     MANAGER --> STRATEGY
+    MANAGER --> LIFECYCLE
     STRATEGY --> GSTRAT
     STRATEGY --> WSTRAT
 
     COMP --> CMANAGER
+    COMP --> VALIDATION
     CMANAGER --> ICOMP
     ICOMP --> BUTTON
     ICOMP --> MODAL
@@ -74,18 +85,259 @@ graph TB
     FADAPTER --> HONO
     FADAPTER --> NEXTJS
     FADAPTER --> EXPRESS
+    FADAPTER --> PERSIST
 
-    FACTORY --> RUNTIME
-    RUNTIME --> NODE
-    RUNTIME --> DENO
-    RUNTIME --> CF
+    CLIENT --> RUNTIME
+    RUNTIME --> ABSTRACTION
+    ABSTRACTION --> NODE
+    ABSTRACTION --> DENO
+    ABSTRACTION --> CF
 
     REST --> DISCORD
     GATEWAY --> DISCORD
+    PERSIST --> DB
+    PERSIST --> CACHE
     WEBHOOK --> WSTRAT
 ```
 
-## 2. コンポーネントクラス階層図
+## 4. ランタイム制約管理図
+
+```mermaid
+graph TD
+    subgraph "Runtime Constraints"
+        DETECT[RuntimeDetector]
+
+        subgraph "Node.js Runtime"
+            NODE_CONSTRAINTS[
+                maxExecutionTime: ∞
+                supportsLongRunning: true
+                supportsFileSystem: true
+                supportsWebSocket: true
+            ]
+        end
+
+        subgraph "Cloudflare Workers"
+            CF_CONSTRAINTS[
+                maxExecutionTime: 10ms
+                supportsLongRunning: true waitUntil
+                supportsFileSystem: false
+                supportsWebSocket: false
+            ]
+        end
+
+        subgraph "Deno Runtime"
+            DENO_CONSTRAINTS[
+                maxExecutionTime: ∞
+                supportsLongRunning: true
+                supportsFileSystem: true
+                supportsWebSocket: true
+            ]
+        end
+    end
+
+    subgraph "Constraint Validation"
+        VALIDATE[ConstraintValidator]
+        CHECK_TIME[Check Execution Time]
+        CHECK_FEATURES[Check Feature Support]
+        THROW_ERROR[Throw RuntimeConstraintError]
+    end
+
+    DETECT --> NODE_CONSTRAINTS
+    DETECT --> CF_CONSTRAINTS
+    DETECT --> DENO_CONSTRAINTS
+
+    NODE_CONSTRAINTS --> VALIDATE
+    CF_CONSTRAINTS --> VALIDATE
+    DENO_CONSTRAINTS --> VALIDATE
+
+    VALIDATE --> CHECK_TIME
+    VALIDATE --> CHECK_FEATURES
+    CHECK_TIME --> THROW_ERROR
+    CHECK_FEATURES --> THROW_ERROR
+```
+
+## 5. データ永続化アーキテクチャ
+
+```mermaid
+graph TB
+    subgraph "Persistence Layer"
+        INTERFACE[PersistenceAdapter Interface]
+
+        subgraph "Node.js Implementation"
+            NODE_PERSIST[NodePersistenceAdapter]
+            REDIS[(Redis)]
+            POSTGRES[(PostgreSQL)]
+            FILE_CACHE[File System Cache]
+        end
+
+        subgraph "Cloudflare Implementation"
+            CF_PERSIST[CloudflarePersistenceAdapter]
+            KV[(KV Storage)]
+            D1[(D1 Database)]
+            DURABLE[(Durable Objects)]
+        end
+
+        subgraph "Deno Implementation"
+            DENO_PERSIST[DenoPersistenceAdapter]
+            DENO_KV[(Deno KV)]
+            DENO_FILE[File System]
+        end
+    end
+
+    subgraph "Cache Management"
+        CACHE_MANAGER[CacheManager]
+        MEMORY_CACHE[Memory Cache]
+        DISTRIBUTED_CACHE[Distributed Cache]
+    end
+
+    INTERFACE --> NODE_PERSIST
+    INTERFACE --> CF_PERSIST
+    INTERFACE --> DENO_PERSIST
+
+    NODE_PERSIST --> REDIS
+    NODE_PERSIST --> POSTGRES
+    NODE_PERSIST --> FILE_CACHE
+
+    CF_PERSIST --> KV
+    CF_PERSIST --> D1
+    CF_PERSIST --> DURABLE
+
+    DENO_PERSIST --> DENO_KV
+    DENO_PERSIST --> DENO_FILE
+
+    CACHE_MANAGER --> MEMORY_CACHE
+    CACHE_MANAGER --> DISTRIBUTED_CACHE
+```
+
+## 6. Interaction処理シーケンス図
+
+### 6.1 Gateway方式でのInteraction処理
+
+```mermaid
+sequenceDiagram
+    participant USER as User
+    participant DISCORD as Discord API
+    participant GATEWAY as GatewayClient
+    participant STRATEGY as GatewayStrategy
+    participant MANAGER as InteractionManager
+    participant COMP as Component
+    participant APP as Application
+
+    USER->>DISCORD: スラッシュコマンド実行
+    DISCORD->>GATEWAY: INTERACTION_CREATE Event
+    GATEWAY->>STRATEGY: handle(interactionData)
+    STRATEGY->>MANAGER: route(interaction)
+    MANAGER->>COMP: execute(interaction)
+    COMP->>APP: ビジネスロジック実行
+    APP-->>COMP: 処理結果
+    COMP-->>MANAGER: InteractionResponse
+    MANAGER-->>STRATEGY: Response
+    STRATEGY->>DISCORD: API Response
+    DISCORD->>USER: レスポンス表示
+```
+
+### 6.2 Webhook方式でのInteraction処理
+
+```mermaid
+sequenceDiagram
+    participant USER as User
+    participant DISCORD as Discord API
+    participant WEBHOOK as Webhook Endpoint
+    participant ADAPTER as FrameworkAdapter
+    participant STRATEGY as WebhookStrategy
+    participant MANAGER as InteractionManager
+    participant COMP as Component
+
+    USER->>DISCORD: スラッシュコマンド実行
+    DISCORD->>WEBHOOK: POST /webhook
+    WEBHOOK->>ADAPTER: parseRequest(req)
+    ADAPTER->>STRATEGY: handle(interactionData)
+    STRATEGY->>MANAGER: route(interaction)
+    MANAGER->>COMP: execute(interaction)
+    COMP-->>MANAGER: InteractionResponse
+    MANAGER-->>STRATEGY: Response
+    STRATEGY-->>ADAPTER: createResponse(data)
+    ADAPTER-->>WEBHOOK: HTTP Response
+    WEBHOOK-->>DISCORD: 200 OK + JSON
+    DISCORD->>USER: レスポンス表示
+```
+
+### 6.3 エラーハンドリングフロー
+
+```mermaid
+sequenceDiagram
+    participant COMP as Component
+    participant ERROR as ErrorHandler
+    participant CONSTRAINT as ConstraintManager
+    participant LOG as Logger
+    participant USER as User
+
+    COMP->>COMP: execute() throws error
+    COMP->>ERROR: DiscordUniversalError
+    ERROR->>ERROR: classify error source
+    ERROR->>CONSTRAINT: check runtime constraints
+    CONSTRAINT-->>ERROR: constraint info
+    ERROR->>LOG: log error with context
+    ERROR->>ERROR: determine recovery strategy
+
+    alt Can Retry
+        ERROR->>COMP: retry with backoff
+    else Use Fallback
+        ERROR->>ERROR: fallback response
+    else Propagate Error
+        ERROR->>USER: user-friendly error message
+    end
+```
+
+## 7. エラーハンドリングフロー図
+
+```mermaid
+flowchart TD
+    START[Error Occurs]
+
+    subgraph "Error Classification"
+        CLASSIFY{Classify Error Source}
+        API_ERROR[Discord API Error]
+        LIB_ERROR[Library Internal Error]
+        USER_ERROR[User Input Error]
+        RUNTIME_ERROR[Runtime Constraint Error]
+    end
+
+    subgraph "Error Processing"
+        CREATE_ERROR[Create DiscordUniversalError]
+        ADD_CONTEXT[Add Context & Details]
+        LOG_ERROR[Log Error with Source]
+    end
+
+    subgraph "Error Recovery"
+        RETRY{Can Retry?}
+        EXPONENTIAL[Exponential Backoff]
+        FALLBACK[Use Fallback Strategy]
+        PROPAGATE[Propagate to User]
+    end
+
+    START --> CLASSIFY
+    CLASSIFY --> API_ERROR
+    CLASSIFY --> LIB_ERROR
+    CLASSIFY --> USER_ERROR
+    CLASSIFY --> RUNTIME_ERROR
+
+    API_ERROR --> CREATE_ERROR
+    LIB_ERROR --> CREATE_ERROR
+    USER_ERROR --> CREATE_ERROR
+    RUNTIME_ERROR --> CREATE_ERROR
+
+    CREATE_ERROR --> ADD_CONTEXT
+    ADD_CONTEXT --> LOG_ERROR
+    LOG_ERROR --> RETRY
+
+    RETRY -->|Yes| EXPONENTIAL
+    RETRY -->|No| FALLBACK
+    EXPONENTIAL --> FALLBACK
+    FALLBACK --> PROPAGATE
+```
+
+## 8. コンポーネントクラス階層図
 
 ```mermaid
 classDiagram
@@ -137,6 +389,19 @@ classDiagram
         +execute(interaction)* Promise~InteractionResponse~
     }
 
+    class ComponentLifecycleManager {
+        -instances: WeakMap
+        +track(component) T
+        +cleanup(component) void
+        +validateCustomId(customId, component) void
+    }
+
+    class CustomIdValidator {
+        +validateUniqueness(customId) boolean
+        +validateFormat(customId) boolean
+        +generateSuggestions(customId) string[]
+    }
+
     class ConfirmButton {
         +readonly id: "confirm-button"
         +readonly customId: "confirm-action"
@@ -177,347 +442,20 @@ classDiagram
     BaseButton <|-- ConfirmButton
     BaseButton <|-- DeleteButton
     BaseModal <|-- SayCommandModal
-    ComponentManager --> IComponent
+    ComponentManager --> ComponentLifecycleManager
+    ComponentManager --> CustomIdValidator
+    ComponentLifecycleManager --> IComponent
+    CustomIdValidator --> IComponent
 ```
 
-## 3. Interaction処理シーケンス図
+## 9. 関連ドキュメント
 
-### 3.1 Gateway方式でのInteraction処理
+- [要件定義書](./REQUIREMENTS.md) - システム要件と目的
+- [詳細設計仕様書](./DESIGN.md) - 実装アーキテクチャと設計パターン
 
-```mermaid
-sequenceDiagram
-    participant USER as User
-    participant DISCORD as Discord API
-    participant GATEWAY as GatewayClient
-    participant STRATEGY as GatewayStrategy
-    participant MANAGER as InteractionManager
-    participant COMP as Component
-    participant APP as Application
+### 設計整合性チェックポイント
 
-    USER->>DISCORD: スラッシュコマンド実行
-    DISCORD->>GATEWAY: INTERACTION_CREATE Event
-    GATEWAY->>STRATEGY: handle(interactionData)
-    STRATEGY->>MANAGER: route(interaction)
-    MANAGER->>COMP: execute(interaction)
-    COMP->>APP: ビジネスロジック実行
-    APP-->>COMP: 処理結果
-    COMP-->>MANAGER: InteractionResponse
-    MANAGER-->>STRATEGY: Response
-    STRATEGY->>DISCORD: API Response
-    DISCORD->>USER: レスポンス表示
-```
-
-### 3.2 Webhook方式でのInteraction処理
-
-```mermaid
-sequenceDiagram
-    participant USER as User
-    participant DISCORD as Discord API
-    participant WEBHOOK as Webhook Endpoint
-    participant ADAPTER as FrameworkAdapter
-    participant STRATEGY as WebhookStrategy
-    participant MANAGER as InteractionManager
-    participant COMP as Component
-    participant APP as Application
-
-    USER->>DISCORD: スラッシュコマンド実行
-    DISCORD->>WEBHOOK: POST /interactions
-    WEBHOOK->>ADAPTER: parseRequest(req)
-    ADAPTER->>STRATEGY: handle(interactionData)
-    STRATEGY->>MANAGER: route(interaction)
-    MANAGER->>COMP: execute(interaction)
-    COMP->>APP: ビジネスロジック実行
-    APP-->>COMP: 処理結果
-    COMP-->>MANAGER: InteractionResponse
-    MANAGER-->>STRATEGY: Response
-    STRATEGY-->>ADAPTER: Response Data
-    ADAPTER-->>WEBHOOK: HTTP Response
-    WEBHOOK-->>DISCORD: 200 OK + Response
-    DISCORD->>USER: レスポンス表示
-```
-
-## 4. コンポーネント登録・実行フロー
-
-```mermaid
-sequenceDiagram
-    participant DEV as Developer
-    participant MANAGER as ComponentManager
-    participant COMP as Component Class
-    participant INSTANCE as Component Instance
-    participant INTERACTION as Interaction
-
-    Note over DEV: アプリケーション初期化時
-    DEV->>MANAGER: register(ConfirmButton)
-    MANAGER->>COMP: new ConfirmButton()
-    COMP-->>INSTANCE: インスタンス生成
-    MANAGER->>MANAGER: store(customId, instance)
-    MANAGER->>MANAGER: store(class, instance)
-
-    Note over DEV: メッセージ作成時
-    DEV->>MANAGER: create(ConfirmButton)
-    MANAGER->>MANAGER: get(ConfirmButton)
-    MANAGER->>INSTANCE: create()
-    INSTANCE-->>MANAGER: MessageComponent
-    MANAGER-->>DEV: MessageComponent
-
-    Note over DEV: Interaction受信時
-    INTERACTION->>MANAGER: handle(interaction)
-    MANAGER->>MANAGER: components.get(customId)
-    MANAGER->>INSTANCE: execute(interaction)
-    INSTANCE->>INSTANCE: ビジネスロジック
-    INSTANCE-->>MANAGER: InteractionResponse
-    MANAGER-->>INTERACTION: InteractionResponse
-```
-
-## 5. マルチランタイム対応アーキテクチャ
-
-```mermaid
-graph TB
-    subgraph "Application Layer"
-        APP[User Application]
-    end
-
-    subgraph "SDK Core"
-        DETECTOR[RuntimeDetector]
-    end
-
-    subgraph "Runtime Implementations"
-        subgraph "Node.js"
-            NCLIENT[NodeDiscordClient]
-            NREST[NodeRestClient]
-            NGATEWAY[NodeGatewayClient]
-        end
-
-        subgraph "Deno"
-            DCLIENT[DenoDiscordClient]
-            DREST[DenoRestClient]
-            DGATEWAY[DenoGatewayClient]
-        end
-
-        subgraph "Cloudflare Workers"
-            CCLIENT[CloudflareDiscordClient]
-            CREST[CloudflareRestClient]
-            CWEBHOOK[CloudflareWebhookHandler]
-        end
-
-        subgraph "Bun"
-            BCLIENT[BunDiscordClient]
-            BREST[BunRestClient]
-            BGATEWAY[BunGatewayClient]
-        end
-    end
-
-    subgraph "External APIs"
-        DISCORD[Discord API]
-        WEBHOOK[Webhook Endpoints]
-    end
-
-    APP --> FACTORY
-    FACTORY --> DETECTOR
-
-    DETECTOR --> NCLIENT
-    DETECTOR --> DCLIENT
-    DETECTOR --> CCLIENT
-    DETECTOR --> BCLIENT
-
-    NCLIENT --> NREST
-    NCLIENT --> NGATEWAY
-
-    DCLIENT --> DREST
-    DCLIENT --> DGATEWAY
-
-    CCLIENT --> CREST
-    CCLIENT --> CWEBHOOK
-
-    BCLIENT --> BREST
-    BCLIENT --> BGATEWAY
-
-    NREST --> DISCORD
-    DREST --> DISCORD
-    CREST --> DISCORD
-    BREST --> DISCORD
-
-    NGATEWAY --> DISCORD
-    DGATEWAY --> DISCORD
-    BGATEWAY --> DISCORD
-
-    CWEBHOOK --> WEBHOOK
-```
-
-## 6. フレームワークアダプター構成
-
-```mermaid
-graph LR
-    subgraph "Framework Requests"
-        HONO_REQ[Hono Context]
-        NEXT_REQ[NextRequest]
-        EXPRESS_REQ[Express Request]
-        FASTIFY_REQ[Fastify Request]
-    end
-
-    subgraph "Adapter Layer"
-        HONO_ADAPTER[HonoAdapter]
-        NEXT_ADAPTER[NextJSAdapter]
-        EXPRESS_ADAPTER[ExpressAdapter]
-        FASTIFY_ADAPTER[FastifyAdapter]
-    end
-
-    subgraph "Unified Interface"
-        INTERACTION_REQ[InteractionRequest]
-        WEBHOOK_STRATEGY[WebhookStrategy]
-        INTERACTION_RES[InteractionResponse]
-    end
-
-    subgraph "Framework Responses"
-        HONO_RES[Hono Response]
-        NEXT_RES[NextResponse]
-        EXPRESS_RES[Express Response]
-        FASTIFY_RES[Fastify Reply]
-    end
-
-    HONO_REQ --> HONO_ADAPTER
-    NEXT_REQ --> NEXT_ADAPTER
-    EXPRESS_REQ --> EXPRESS_ADAPTER
-    FASTIFY_REQ --> FASTIFY_ADAPTER
-
-    HONO_ADAPTER --> INTERACTION_REQ
-    NEXT_ADAPTER --> INTERACTION_REQ
-    EXPRESS_ADAPTER --> INTERACTION_REQ
-    FASTIFY_ADAPTER --> INTERACTION_REQ
-
-    INTERACTION_REQ --> WEBHOOK_STRATEGY
-    WEBHOOK_STRATEGY --> INTERACTION_RES
-
-    INTERACTION_RES --> HONO_ADAPTER
-    INTERACTION_RES --> NEXT_ADAPTER
-    INTERACTION_RES --> EXPRESS_ADAPTER
-    INTERACTION_RES --> FASTIFY_ADAPTER
-
-    HONO_ADAPTER --> HONO_RES
-    NEXT_ADAPTER --> NEXT_RES
-    EXPRESS_ADAPTER --> EXPRESS_RES
-    FASTIFY_ADAPTER --> FASTIFY_RES
-```
-
-## 7. エラーハンドリングフロー
-
-```mermaid
-sequenceDiagram
-    participant COMP as Component
-    participant MANAGER as InteractionManager
-    participant HANDLER as ErrorHandler
-    participant LOGGER as Logger
-    participant USER as User Response
-
-    COMP->>COMP: execute(interaction)
-
-    alt 正常処理
-        COMP-->>MANAGER: InteractionResponse
-        MANAGER-->>USER: Success Response
-    else コンポーネントエラー
-        COMP->>COMP: throw ComponentError
-        COMP->>HANDLER: handleError(error)
-        HANDLER->>LOGGER: logError(error)
-        HANDLER->>HANDLER: generateErrorResponse()
-        HANDLER-->>MANAGER: Error InteractionResponse
-        MANAGER-->>USER: Error Response
-    else バリデーションエラー
-        COMP->>COMP: validate() -> false
-        COMP->>HANDLER: handleValidationError()
-        HANDLER-->>MANAGER: Validation Error Response
-        MANAGER-->>USER: Validation Error
-    else 予期しないエラー
-        COMP->>COMP: throw UnexpectedError
-        COMP->>HANDLER: handleUnexpectedError(error)
-        HANDLER->>LOGGER: logCriticalError(error)
-        HANDLER->>HANDLER: generateGenericError()
-        HANDLER-->>MANAGER: Generic Error Response
-        MANAGER-->>USER: Generic Error Message
-    end
-```
-
-## 8. データ永続化・キャッシュシステム構成
-
-```mermaid
-graph TB
-    subgraph "Application"
-        CLIENT[DiscordClient]
-        CONFIG[PersistenceConfig]
-    end
-
-    subgraph "Data Layer"
-        MANAGER[DataManager]
-
-        subgraph "Storage Strategies"
-            MEMORY[MemoryCacheStrategy]
-            PRISMA[PrismaKyselyStrategy]
-            CUSTOM[CustomStorageStrategy]
-        end
-
-        subgraph "Data Types"
-            USER_CACHE[UserData]
-            GUILD_CACHE[GuildData]
-            MESSAGE_CACHE[MessageData]
-            CHANNEL_CACHE[ChannelData]
-        end
-    end
-
-    subgraph "Storage"
-        HEAP[Heap Memory]
-        DATABASE[Database (SQLite/PostgreSQL/MySQL)]
-        CUSTOM_STORE[Custom Storage]
-    end
-
-    CLIENT --> CONFIG
-    CONFIG --> MANAGER
-
-    MANAGER --> MEMORY
-    MANAGER --> PRISMA
-    MANAGER --> CUSTOM
-
-    MANAGER --> USER_CACHE
-    MANAGER --> GUILD_CACHE
-    MANAGER --> MESSAGE_CACHE
-    MANAGER --> CHANNEL_CACHE
-
-    MEMORY --> HEAP
-    PRISMA --> DATABASE
-    CUSTOM --> CUSTOM_STORE
-
-    USER_CACHE --> MEMORY
-    GUILD_CACHE --> PRISMA
-    MESSAGE_CACHE --> MEMORY
-    CHANNEL_CACHE --> CUSTOM
-```
-
-## ドキュメント同期運用ルール
-
-**重要**: このシステム設計図は要件定義書・詳細設計仕様書と密接に連携しています。
-
-### 図の更新タイミング
-
-1. **要件変更時**
-   - システム全体図の更新
-   - 新しいランタイムやフレームワーク対応の追加
-   - キャッシュ戦略の変更反映
-
-2. **設計変更時**
-   - クラス図の更新（継承関係、インターフェース変更）
-   - シーケンス図の更新（処理フロー変更）
-   - コンポーネント構成図の更新
-
-3. **実装変更時**
-   - 実際のクラス構造に合わせたクラス図の調整
-   - パフォーマンス最適化後のキャッシュ構成図更新
-
-### 確認チェックリスト
-
-- [ ] 要件定義書の変更内容がシステム全体図に反映されているか
 - [ ] 設計仕様書のクラス構造がクラス図と一致しているか
 - [ ] 処理フローの変更がシーケンス図に反映されているか
 - [ ] 新しいコンポーネントがコンポーネント構成図に追加されているか
 - [ ] README.mdの特徴説明と図の内容が一致しているか
-
-関連ドキュメント：
-- [要件定義書](./REQUIREMENTS.md) - システム要件と目的
-- [詳細設計仕様書](./DESIGN.md) - 実装アーキテクチャと設計パターン

@@ -1,6 +1,6 @@
 # Discord Universal SDK
 
-> [!TIPS]
+> [!TIP]
 > このリポジトリ・ライブラリは設計段階です。<br>
 > ほぼCopilotと相談して企画・構想段階でしかない為、内容は大きく変化する可能性があります。
 
@@ -18,6 +18,9 @@ Discord.jsに代わる次世代マルチランタイム対応Discordライブラ
 - **コンポーネント再利用性**: クラス継承による高い再利用性
 - **軽量**: Discord.jsの50%以下のメモリ使用量
 - **柔軟なキャッシュ**: オプショナル&カスタマイズ可能なキャッシュシステム
+- **インテリジェントエラーハンドリング**: 自動リトライ・フォールバック機能
+- **ランタイム制約透明性**: 実行環境の制約を事前検出・警告
+- **CustomId衝突防止**: 自動検出とコンパイル時検証
 
 ## 🏗️ アーキテクチャ
 
@@ -45,6 +48,10 @@ Discord.jsに代わる次世代マルチランタイム対応Discordライブラ
 | 型安全性 | 部分的 | Interface駆動完全型安全 |
 | 継承・拡張 | 困難 | クラス継承で容易 |
 | キャッシュ | 自動・固定 | オプショナル・カスタマイズ可能 |
+| エラーハンドリング | 基本的 | 自動リトライ・フォールバック |
+| ランタイム制約 | 不透明 | 事前検出・警告 |
+| CustomId管理 | 手動 | 自動衝突検出 |
+| データ永続化 | 非対応 | マルチストレージ対応 |
 | バンドルサイズ | 大 | Tree-shaking対応 |
 | ドキュメント | 分散 | 統一 |
 
@@ -203,6 +210,143 @@ const modifiedEmbed = {
 } satisfies MessageEmbed
 ```
 
+## 🛡️ エラーハンドリング & 制約管理
+
+### 自動エラーハンドリング
+
+```typescript
+// 自動リトライ機能付きのAPI呼び出し
+const client = new NodeDiscordClient({
+  token: 'YOUR_BOT_TOKEN',
+  errorHandling: {
+    maxRetries: 3,
+    retryDelay: 1000,
+    useExponentialBackoff: true,
+    fallbackStrategy: 'graceful' // 'throw' | 'graceful' | 'silent'
+  }
+})
+
+// エラーハンドリング戦略の設定
+class MyCommand implements ISlashCommand {
+  async execute(interaction: SlashCommandInteraction): Promise<InteractionResponse> {
+    try {
+      // 重い処理
+      const result = await heavyComputation()
+      return { type: InteractionResponseType.ChannelMessageWithSource, data: { content: result } }
+    } catch (error) {
+      // SDKが自動的に適切なエラーレスポンスを生成
+      throw new ComponentError('処理中にエラーが発生しました', {
+        cause: error,
+        fallbackMessage: '一時的なエラーです。しばらくしてからお試しください。'
+      })
+    }
+  }
+}
+```
+
+### ランタイム制約の透明性
+
+```typescript
+// Cloudflare Workers特有の制約を事前検出
+const client = new CloudflareDiscordClient({
+  token: 'YOUR_BOT_TOKEN',
+  constraints: {
+    maxExecutionTime: 10000, // 10秒制限を明示
+    validateConstraints: true // 制約違反を事前チェック
+  }
+})
+
+// 制約違反を事前に検出
+class LongRunningCommand implements ISlashCommand {
+  async execute(interaction: SlashCommandInteraction): Promise<InteractionResponse> {
+    // この処理は15秒かかる予定
+    // → CloudflareWorkers環境では警告またはエラーを発生
+    if (RuntimeDetector.isCloudflareWorkers()) {
+      throw new RuntimeConstraintError(
+        'この処理はCloudflare Workersの実行時間制限(10秒)を超える可能性があります'
+      )
+    }
+
+    return await longRunningProcess()
+  }
+}
+```
+
+### CustomId衝突防止システム
+
+```typescript
+// Template Literal Typesによるコンパイル時検証
+type CustomIdPrefix = 'button' | 'modal' | 'select'
+type CustomIdSuffix = 'confirm' | 'cancel' | 'edit'
+type SafeCustomId = `${CustomIdPrefix}-${CustomIdSuffix}`
+
+class TypeSafeButton implements IButtonComponent {
+  // コンパイル時に一意性をチェック
+  public readonly customId: SafeCustomId = 'button-confirm'
+  public readonly label = 'Confirm'
+
+  async execute(interaction: ButtonInteraction): Promise<InteractionResponse> {
+    // 実装...
+  }
+}
+
+// 実行時衝突検出
+const interactionManager = new InteractionManager({
+  validateCustomIds: true, // 登録時に重複チェック
+  customIdConflictStrategy: 'throw' // 'throw' | 'warn' | 'ignore'
+})
+```
+
+## 💾 データ永続化戦略
+
+### マルチストレージ対応
+
+```typescript
+// Node.js環境 - Redis + PostgreSQL
+const nodePersistence = new NodePersistenceAdapter({
+  cache: new RedisAdapter('redis://localhost:6379'),
+  database: new PostgreSQLAdapter('postgresql://...'),
+  fallback: new FileSystemAdapter('./data')
+})
+
+// Cloudflare Workers - KV + D1
+const cfPersistence = new CloudflarePersistenceAdapter({
+  cache: new KVAdapter(env.MY_KV),
+  database: new D1Adapter(env.MY_D1),
+  fallback: new DurableObjectAdapter(env.MY_DO)
+})
+
+// 統一インターフェース
+const client = new NodeDiscordClient({
+  token: 'YOUR_BOT_TOKEN',
+  persistence: nodePersistence // 環境に応じて切り替え
+})
+```
+
+### セッション管理
+
+```typescript
+// セッションベースのデータ永続化
+class StatefulModal implements IModalComponent {
+  public readonly customId = 'stateful-modal'
+
+  async execute(interaction: ModalInteraction): Promise<InteractionResponse> {
+    // セッションデータを取得
+    const sessionData = await interaction.client.persistence.getSession(interaction.user.id)
+
+    // 処理...
+
+    // セッションデータを更新
+    await interaction.client.persistence.updateSession(interaction.user.id, {
+      lastAction: 'modal-submitted',
+      timestamp: Date.now()
+    })
+
+    return { type: InteractionResponseType.UpdateMessage, data: { content: 'Success!' } }
+  }
+}
+```
+
 ## 🎯 OOPベースの設計
 
 このSDKは**オブジェクト指向プログラミング（OOP）**を基盤とした設計になっています：
@@ -219,6 +363,88 @@ const client = ClientFactory.create('node', config)
 
 // ✅ OOP ベース（新方式）
 const client = new NodeDiscordClient(config)
+```
+
+## 🔧 実装時のベストプラクティス
+
+### 1. 型安全な設計パターン
+
+```typescript
+// Interfaceを活用した型安全な設計
+interface ICommandWithOptions<T extends Record<string, any>> {
+  name: string
+  description: string
+  options: T
+  execute(interaction: SlashCommandInteraction<T>): Promise<InteractionResponse>
+}
+
+// 使用例
+class EchoCommand implements ICommandWithOptions<{ message: string }> {
+  name = 'echo'
+  description = 'Echo a message'
+  options = {
+    message: {
+      type: ApplicationCommandOptionType.String,
+      description: 'Message to echo',
+      required: true
+    }
+  } as const
+
+  async execute(interaction: SlashCommandInteraction<{ message: string }>) {
+    // interaction.options.getString('message') は完全に型安全
+    const message = interaction.options.getString('message') // string型が保証される
+    return {
+      type: InteractionResponseType.ChannelMessageWithSource,
+      data: { content: `Echo: ${message}` }
+    }
+  }
+}
+```
+
+### 2. ライフサイクル管理
+
+```typescript
+// コンポーネントのライフサイクル管理
+class ManagedComponent implements IButtonComponent {
+  public readonly customId = 'managed-button'
+  public readonly label = 'Click Me'
+
+  // 自動クリーンアップ
+  onDestroy?(): void {
+    // リソースのクリーンアップ
+    this.cleanupResources()
+  }
+
+  // TTL（Time To Live）設定
+  get ttl(): number {
+    return 5 * 60 * 1000 // 5分でタイムアウト
+  }
+
+  async execute(interaction: ButtonInteraction): Promise<InteractionResponse> {
+    // 実装...
+  }
+}
+```
+
+### 3. 環境固有の最適化
+
+```typescript
+// 環境に応じた最適化
+class OptimizedCommand implements ISlashCommand {
+  async execute(interaction: SlashCommandInteraction): Promise<InteractionResponse> {
+    // 実行環境に応じて処理を分岐
+    if (RuntimeDetector.isCloudflareWorkers()) {
+      // Cloudflare Workers: 軽量処理
+      return await this.lightweightProcess(interaction)
+    } else if (RuntimeDetector.isNode()) {
+      // Node.js: 高性能処理
+      return await this.heavyProcess(interaction)
+    } else {
+      // その他の環境: 汎用処理
+      return await this.genericProcess(interaction)
+    }
+  }
+}
 ```
 
 ## 🚧 開発状況
@@ -253,6 +479,49 @@ const client = new NodeDiscordClient(config)
 - [ ] 設計変更 → DESIGN.md, ARCHITECTURE.md のクラス図・シーケンス図
 - [ ] 新機能追加 → 全ドキュメント + 対応するMermaid図
 - [ ] API変更 → README.md の使用例コード
+
+## ⚠️ 注意事項・制限事項
+
+### ランタイム固有の制約
+
+```typescript
+// Cloudflare Workers
+- 最大実行時間: 10秒 (waitUntil使用時は延長可能)
+- ファイルシステム: 利用不可
+- WebSocket: 利用不可 (Durable Objects経由で可能)
+
+// Deno
+- Node.js互換性: 一部制限あり
+- npm パッケージ: 互換性レイヤー経由
+
+// Bun
+- 一部のNode.js API: 実装が異なる場合あり
+```
+
+### 推奨事項
+
+1. **CustomId命名**: `{prefix}-{action}-{id}` 形式を推奨
+2. **エラーハンドリング**: 必ず適切なフォールバックを設定
+3. **ランタイム制約**: 事前に制約チェックを有効化
+4. **セッション管理**: 長時間のやり取りでは永続化を活用
+5. **型安全性**: Template Literal TypesでCustomIdを管理
+
+### よくある落とし穴
+
+```typescript
+// ❌ 悪い例: CustomId重複
+class Button1 implements IButtonComponent {
+  customId = 'button' // 汎用的すぎる
+}
+class Button2 implements IButtonComponent {
+  customId = 'button' // 重複！
+}
+
+// ✅ 良い例: 一意なCustomId
+class ConfirmButton implements IButtonComponent {
+  customId = 'confirm-delete-user-button' // 具体的で一意
+}
+```
 
 ## �📝 ライセンス
 

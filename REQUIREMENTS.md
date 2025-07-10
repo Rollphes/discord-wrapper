@@ -46,10 +46,39 @@ Discord.jsに対する主な不満点：
 
 CloudflareWorkerの制約に対応した設計要件：
 
-#### 2.3.1 ctx.waitUntil対応
+#### 2.3.1 ランタイム制約管理システム
 
 ```typescript
-// 時間のかかる処理の非同期実行対応
+// 各ランタイムの制約を統一的に管理
+export interface RuntimeConstraints {
+  maxExecutionTime: number
+  supportsLongRunning: boolean
+  supportsFileSystem: boolean
+  supportsWebSocket: boolean
+}
+
+export class ConstraintManager {
+  static getConstraints(runtime: RuntimeType): RuntimeConstraints {
+    switch (runtime) {
+      case 'cloudflare-workers':
+        return {
+          maxExecutionTime: 10000, // 10ms
+          supportsLongRunning: true, // waitUntil経由
+          supportsFileSystem: false,
+          supportsWebSocket: false
+        }
+      case 'nodejs':
+        return {
+          maxExecutionTime: Infinity,
+          supportsLongRunning: true,
+          supportsFileSystem: true,
+          supportsWebSocket: true
+        }
+    }
+  }
+}
+
+// ctx.waitUntil対応
 interface CloudflareContext {
   waitUntil?: (promise: Promise<any>) => void
 }
@@ -60,14 +89,54 @@ client.handleWebhook(request, {
 })
 ```
 
-#### 2.3.2 統一されたInteraction管理
+#### 2.3.2 エラーハンドリング戦略
+
+```typescript
+// 統一されたエラー分類システム
+export enum ErrorSource {
+  DISCORD_API = 'discord_api',
+  LIBRARY_INTERNAL = 'library_internal',
+  USER_INPUT = 'user_input',
+  RUNTIME_CONSTRAINT = 'runtime_constraint'
+}
+
+export class DiscordUniversalError extends Error {
+  constructor(
+    public readonly source: ErrorSource,
+    public readonly code: string,
+    message: string,
+    public readonly details?: Record<string, unknown>
+  ) {
+    super(message)
+    this.name = 'DiscordUniversalError'
+  }
+}
+
+// CloudflareWorkers特有の制約エラー
+export class RuntimeConstraintError extends DiscordUniversalError {
+  constructor(message: string, constraint: string, runtime: string) {
+    super(ErrorSource.RUNTIME_CONSTRAINT, 'CONSTRAINT_VIOLATION', message, {
+      constraint,
+      runtime
+    })
+  }
+}
+```
+
+#### 2.3.3 統一されたInteraction管理
 
 コマンドとコンポーネントを単一のInteractionManagerで管理：
 
 ```typescript
 class InteractionManager {
-  // コマンドとコンポーネントの統一登録
-  register<T extends IInteractionHandler>(HandlerClass: new () => T): void
+  // 型安全なコンポーネント登録
+  register<T extends IInteractionHandler>(
+    HandlerClass: new () => T
+  ): T extends ISlashCommand
+    ? SlashCommandRegistration<T>
+    : T extends IButtonComponent
+    ? ButtonComponentRegistration<T>
+    : ComponentRegistration<T>
 
   // コンポーネント生成
   create<T extends IComponent>(ComponentClass: new () => T): MessageComponent
@@ -546,21 +615,21 @@ const message = {
 
 #### 4.2.6 実装時の配慮事項
 
-**型安全性の確保**
+##### 型安全性の確保
 
 - Interface駆動開発による設計時の型安全性確保
 - クラス実装による実行時型チェック
 - Generic型とConstraintsを活用した柔軟な型定義
-- `as const` assertionによる定数値の型推論最適化
+- Template Literal Typesの**必要最小限**の使用（型推論パフォーマンス重視）
 
-**パフォーマンス最適化**
+##### パフォーマンス最適化
 
 - クラスインスタンスの適切なライフサイクル管理
 - Singletonパターンによるコンポーネント再利用
 - 遅延初期化（Lazy Loading）による起動時間短縮
 - メモリリークを防ぐ適切なオブジェクト破棄
 
-**開発者体験の向上**
+##### 開発者体験の向上
 
 - IDEでの強力な型補完とIntelliSense
 - 抽象クラスによるテンプレート提供
@@ -569,7 +638,7 @@ const message = {
 
 #### 4.2.7 推奨実装パターン
 
-**クラス設計のベストプラクティス**
+##### クラス設計のベストプラクティス
 
 ```typescript
 // ✅ 推奨: Interface + 抽象クラス + 具象クラス
@@ -611,19 +680,52 @@ export class PingCommand extends BaseCommand {
 
 ### 4.3 キャッシュシステム
 
-#### 4.3.1 オプショナルキャッシュ
-
-- **明示的制御**: キャッシュの有効/無効を明示的に制御
-- **カスタマイズ可能**: キャッシュ戦略をカスタマイズ可能
-- **メモリ効率**: 必要最小限のキャッシュ
+#### 4.3.1 オプショナルキャッシュとデータ永続化戦略
 
 ```typescript
+// 統一インターフェース
+export interface PersistenceAdapter {
+  required: boolean
+  capabilities: PersistenceCapability[]
+  setup(config: PersistenceConfig): Promise<void>
+}
+
+export enum PersistenceCapability {
+  CACHE = 'cache',
+  PERSISTENT_STORAGE = 'persistent_storage',
+  TRANSACTION = 'transaction'
+}
+
+// CloudflareWorkers用の実装
+export class CloudflarePersistenceAdapter implements PersistenceAdapter {
+  required = true // CloudflareではDB接続が必須
+  capabilities = [
+    PersistenceCapability.CACHE,
+    PersistenceCapability.PERSISTENT_STORAGE
+  ]
+
+  async setup(config: CloudflarePersistenceConfig): Promise<void> {
+    // KV/D1/Durable Objects 接続設定
+  }
+}
+
+// Node.js用の実装
+export class NodePersistenceAdapter implements PersistenceAdapter {
+  required = false // Node.jsではオプショナル
+  capabilities = [
+    PersistenceCapability.CACHE,
+    PersistenceCapability.PERSISTENT_STORAGE,
+    PersistenceCapability.TRANSACTION
+  ]
+}
+
 const client = new DiscordClient({
   cache: {
     messages: { enabled: true, maxSize: 1000 },
     users: { enabled: false },
     guilds: { enabled: true, ttl: 3600 }
-  }
+  },
+  persistence: new CloudflarePersistenceAdapter()
 })
 ```
 
