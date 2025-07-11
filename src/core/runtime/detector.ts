@@ -2,20 +2,20 @@ import { getRuntimeConstraints } from '@/core/runtime/constraints'
 import { getRuntimeFeatures } from '@/core/runtime/features'
 import type { RuntimeInfo, RuntimeType } from '@/core/runtime/types'
 
-let detectedRuntime: RuntimeInfo | null = null
+let detectedRuntimeInfo: RuntimeInfo | null = null
 
 /**
  * Get runtime information for the current environment
  * @returns Runtime information including type, version, and features
  */
 export function getRuntimeInfo(): RuntimeInfo {
-  if (detectedRuntime) return detectedRuntime
+  if (detectedRuntimeInfo) return detectedRuntimeInfo
 
-  detectedRuntime = detectRuntime()
-  return detectedRuntime
+  detectedRuntimeInfo = createRuntimeInfo()
+  return detectedRuntimeInfo
 }
 
-function detectRuntime(): RuntimeInfo {
+function createRuntimeInfo(): RuntimeInfo {
   const global = globalThis as Record<string, unknown>
   const type = detectRuntimeType()
   let version: string | undefined = undefined
